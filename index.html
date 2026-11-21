@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Procrastination Breaker</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f0f4fa;
+      color: #0f172a;
+      padding: 20px;
+    }
+    .card {
+      background: #ffffff;
+      width: 100%;
+      max-width: 420px;
+      padding: 32px 24px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      background: #dbeafe;
+      color: #1d4ed8;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 999px;
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; color: #0f172a; }
+    p.subtitle { font-size: 15px; color: #475569; margin-bottom: 28px; line-height: 1.5; }
+    .timer {
+      font-size: 56px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #1e3a8a;
+      margin-bottom: 24px;
+    }
+    .btn {
+      width: 100%;
+      padding: 15px 20px;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      background: #1d4ed8;
+      color: #ffffff;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #1e40af; }
+    .btn:disabled { background: #93c5fd; cursor: not-allowed; }
+    .btn-secondary {
+      margin-top: 10px;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .btn-secondary:hover { background: #dbeafe; }
+    .status {
+      margin-top: 18px;
+      font-size: 14px;
+      color: #1e40af;
+      min-height: 20px;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <span class="badge" id="badge">Loading experiment...</span>
+    <h1 id="headline">Beat Procrastination</h1>
+    <p class="subtitle" id="subtext">Preparing your focus session...</p>
+    <div class="timer" id="timerDisplay">--:--</div>
+    <button class="btn" id="startBtn" disabled>Loading...</button>
+    <button class="btn btn-secondary" id="resetBtn" style="display:none;">Reset Timer</button>
+    <div class="status" id="statusMsg"></div>
+  </div>
+
+  <script type="module">
+    import flagsmith from "https://esm.sh/@flagsmith/flagsmith@latest";
+
+    // Replace with your Flagsmith Client-side Environment Key
+    const ENVIRONMENT_ID = "YOUR_FLAGSMITH_ENV_KEY";
+    const FLAG_NAME = "sprint_framing";
+
+    // Persistent anonymous user ID so Flagsmith links exposure + conversion
+    let userId = localStorage.getItem("pb_user_id");
+    if (!userId) {
+      userId = "user_" + (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+      localStorage.setItem("pb_user_id", userId);
+    }
+
+    const badge = document.getElementById("badge");
+    const headline = document.getElementById("headline");
+    const subtext = document.getElementById("subtext");
+    const timerDisplay = document.getElementById("timerDisplay");
+    const startBtn = document.getElementById("startBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const statusMsg = document.getElementById("statusMsg");
+
+    let totalSeconds = 25 * 60;
+    let remainingSeconds = totalSeconds;
+    let elapsedSeconds = 0;
+    let intervalId = null;
+    let trackedStart = false;
+    let tracked60s = false;
+
+    function formatTime(secs) {
+      const m = String(Math.floor(secs / 60)).padStart(2, "0");
+      const s = String(secs % 60).padStart(2, "0");
+      return `${m}:${s}`;
+    }
+
+    function applyVariant(variant) {
+      if (variant === "micro_2") {
+        totalSeconds = 2 * 60;
+        badge.textContent = "Micro-Sprint Mode";
+        headline.textContent = "Just 2 Minutes.";
+        subtext.textContent = "Start tiny. You have full permission to stop when the timer hits zero.";
+        startBtn.textContent = "Start a 2-Minute Micro-Sprint";
+      } else {
+        totalSeconds = 25 * 60;
+        badge.textContent = "Deep Focus Mode";
+        headline.textContent = "Deep Work Session";
+        subtext.textContent = "Lock in for one classic Pomodoro block and knock out your top task.";
+        startBtn.textContent = "Start a 25-Minute Pomodoro";
+      }
+      remainingSeconds = totalSeconds;
+      timerDisplay.textContent = formatTime(remainingSeconds);
+      startBtn.disabled = false;
+    }
+
+    async function sendEvent(eventName) {
+      try {
+        if (typeof flagsmith.trackEvent === "function") {
+          flagsmith.trackEvent(eventName);
+        }
+        if (typeof flagsmith.flushEvents === "function") {
+          await flagsmith.flushEvents();
+        }
+      } catch (err) {
+        console.error("Event tracking error:", err);
+      }
+    }
+
+    async function initApp() {
+      try {
+        await flagsmith.init({
+          environmentID: ENVIRONMENT_ID,
+          identity: userId,
+          enableAnalytics: true,
+          defaultFlags: {
+            [FLAG_NAME]: { enabled: true, value: "pomodoro_25" }
+          }
+        });
+
+        const variant = flagsmith.getValue(FLAG_NAME);
+        applyVariant(variant);
+      } catch (err) {
+        console.error("Flagsmith init failed, using default:", err);
+        applyVariant("pomodoro_25");
+      }
+    }
+
+    startBtn.addEventListener("click", () => {
+      if (intervalId) return;
+
+      startBtn.disabled = true;
+      resetBtn.style.display = "block";
+      statusMsg.textContent = "Sprint running — stay on this tab!";
+
+      if (!trackedStart) {
+        trackedStart = true;
+        sendEvent("sprint_started");
+      }
+
+      intervalId = setInterval(() => {
+        remainingSeconds--;
+        elapsedSeconds++;
+        timerDisplay.textContent = formatTime(remainingSeconds);
+
+        if (elapsedSeconds === 60 && !tracked60s) {
+          tracked60s = true;
+          sendEvent("sprint_60s_completed");
+          statusMsg.textContent = "60s milestone hit! Momentum unlocked.";
+        }
+
+        if (remainingSeconds <= 0) {
+          clearInterval(intervalId);
+          intervalId = null;
+          statusMsg.textContent = "Sprint complete! Keep going or take a break.";
+          startBtn.disabled = false;
+        }
+      }, 1000);
+    });
+
+    resetBtn.addEventListener("click", () => {
+      clearInterval(intervalId);
+      intervalId = null;
+      remainingSeconds = totalSeconds;
+      elapsedSeconds = 0;
+      timerDisplay.textContent = formatTime(remainingSeconds);
+      startBtn.disabled = false;
+      resetBtn.style.display = "none";
+      statusMsg.textContent = "";
+    });
+
+    initApp();
+  </script>
+</body>
+</html>
